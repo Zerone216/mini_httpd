@@ -35,6 +35,9 @@
  > Changelogs:
 */
 
+#define __USE_FILE_OFFSET64
+#define __USE_LARGEFILE64
+#define _LARGEFILE64_SOURCE
 
 #include "version.h"
 
@@ -176,6 +179,7 @@ typedef long long int64_t;
 #define METHOD_HEAD 2
 #define METHOD_POST 3
 
+#define UNKNOWN_INFO "????????"
 
 /* A multi-family sockaddr. */
 typedef union {
@@ -1610,38 +1614,47 @@ do_dir( void )
 #endif /* HAVE_SCANDIR */
 
     contents_size = 0;
-    (void) snprintf( buf, sizeof(buf), "<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\" \"http://www.w3.org/TR/html4/loose.dtd\">\n\
-\n\
+    (void) snprintf( buf, sizeof(buf), "\
+<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\" \"http://www.w3.org/TR/html4/loose.dtd\">\n\
 <html>\n\
-\n\
   <head>\n\
     <meta http-equiv=\"Content-type\" content=\"text/html;charset=UTF-8\">\n\
     <title>Index of %s</title>\n\
   </head>\n\
-\n\
-	<style>\n\
-	h4 {font-size:1.6em;color:rgb(46, 46, 46);}\n\
-	p {color:rgb(0, 16, 255);}\n\
-	pre {font-size:1.3em;color:rgb(0, 0, 0);}\n\
-	a:link {font-size:1em; line-height:140%;text-decoration:none ; color:rgba(0, 24, 104, 0.87) ;}\n\
-	a:visited {text-decoration:none ; color:rgb(133, 42, 0);}\n\
-	a:hover {text-decoration:none ; color:rgb(150, 0, 250);}\n\
-	a:active {text-decoration:none ; color:rgb(26, 241, 7);}\n\
-	</style>\n\
-  <body bgcolor=\"#F0FFFF\">\n\
-    <h4><i>Index of %s</i></h4>\n\
+  <style>\n\
+  body { background-color: rgb(240, 235, 255);}\n\
+  .table-a table{border:1px solid #F00}\n\
+  h4 {font-size:1.4em;color:rgb(46, 46, 46);}\n\
+  p {color:rgb(0, 16, 255);}\n\
+  pre {font-size:1.3em;color:rgb(0, 0, 0);}\n\
+  a:link {font-size:1em; line-height:140%;text-decoration:none ; color:rgba(0, 24, 104, 0.87) ;}\n\
+  a:visited {text-decoration:none ; color:rgb(133, 42, 0);}\n\
+  a:hover {text-decoration:none ; color:rgb(150, 0, 250);}\n\
+  a:active {text-decoration:none ; color:rgb(26, 241, 7);}\n\
+  </style>\n\
+  <body>\n\
+	<table>\n\
+    <tbody><tr><td width=\"100\"><h4>Index of </h4></td><td><h4 style=\"color:#1650FD\">%s</h4></td></tr></tbody>\n\
+	<table>\n\
 	<hr>\n\
-    <pre>\n\
-<p>    %-78.78s   %16s   %32s</p>",
-	file, file , "Name", "Size", "Last Modify Time");
+	<table cellspacing=\"0\" cellpadding=\"3\"> \n\
+		<thead>\n\
+            <tr align=\"left\" valign=\"center\" height=\"50\">\n\ 
+			  <th  width=\"20\"> </th><th width=\"700\">File Name</th><th align=\"right\" width=\"150\">Size</th><th align=\"right\" width=\"300\">Last Modify Time</th>\n\
+			</tr>\n\
+        </thead>\n\
+		<tbody align=\"left\" valign=\"center\">\n",
+	file, file);
     add_str( &contents, &contents_size, &contents_len, buf );
 
 #ifdef HAVE_SCANDIR
 
     for ( i = 0; i < n; ++i )
 	{
-	name_info = file_details( file, dl[i]->d_name );
-	add_str( &contents, &contents_size, &contents_len, name_info );
+		name_info = file_details( file, dl[i]->d_name );
+		if(strncmp(UNKNOWN_INFO, name_info, strlen(UNKNOWN_INFO)) == 0)
+			continue;
+		add_str( &contents, &contents_size, &contents_len, name_info );
 	}
 
 #else /* HAVE_SCANDIR */
@@ -1667,16 +1680,13 @@ do_dir( void )
 #endif /* HAVE_SCANDIR */
 
     (void) snprintf( buf, sizeof(buf), "\
-    </pre>\n\
-\n\
+	  <tbody>\n\
+    </table>\n\
     <hr>\n\
-\n\
     <address><a href=\"%s\">%s</a></address>\n\
-  \n\
   </body>\n\
-\n\
 </html>\n",
-	SERVER_URL, SERVER_SOFTWARE );
+	"https://github.com/zerone216/mini_httpd", "See more details of mini_httpd click here!" );
     add_str( &contents, &contents_size, &contents_len, buf );
 
     add_headers( 200, "Ok", "", "", "text/html; charset=%s", contents_len, sb.st_mtime );
@@ -1708,6 +1718,7 @@ get_cmd_result(const char *fmt, ...)
 	if(result == NULL)
 		return NULL;
 	
+	memset(result, 0x00, file_len);
 	FILE * fstream = popen(cmd , "r");
 	if(fstream == NULL)
 	{
@@ -1738,6 +1749,20 @@ free_cmd_result(char ** result)
 		free(*result);
 }
 
+unsigned long long get_file_size(const char * filename)
+{
+	int fd = open(filename, O_RDONLY | O_LARGEFILE);
+	if(fd <= 0)
+	{
+		printf("open file[%s] filed!\n", filename);
+		return -1;
+	}
+	
+	unsigned long long size = lseek64(fd, 0, SEEK_END);
+	close(fd);
+	
+	return size;
+}
 
 #define S_1KB 1024ULL
 #define S_1MB (S_1KB * S_1KB)
@@ -1758,43 +1783,70 @@ static char * auto_trans_size(long long size)
 	return sizeExp;
 }
 
-static char*
+static char *
 file_details( const char* d, const char* name )
-    {
+{
     struct stat sb2;
     char timestr[32] = {0};
     static char encname[1000] = {0};
     static char buf[2000] = {0};
 	static char pic[64] = {0};
+	char sizestr[64] = {0};
 
-    (void) snprintf( buf, sizeof(buf), "%s/%s", d, name );
+	if(d[strlen(d) - 1] == '/')
+	{
+		if(strncmp(d,"./",2) == 0)
+			(void) snprintf( buf, sizeof(buf), "%s", name );
+		else
+			(void) snprintf( buf, sizeof(buf), "%s%s", d, name );
+	}
+	else
+    	(void) snprintf( buf, sizeof(buf), "%s/%s", d, name );
+	
+	if(strncmp(buf, "pics", 4) == 0)
+		return UNKNOWN_INFO;
+
     if ( lstat( buf, &sb2 ) < 0 )
-	return "???";
-
+	{
+		return UNKNOWN_INFO;
+	}
+	
 	snprintf(pic, sizeof(pic),"/pics/%s.png", "file");
 	if(S_ISDIR(sb2.st_mode))
-	{
+	{		
+		snprintf(sizestr, sizeof(sizestr), "%s", "·~·~·");
 		snprintf(pic, sizeof(pic),"/pics/%s.png", "dir");
 	}
 	else if(S_ISREG(sb2.st_mode))
 	{
-		char * result = NULL;
-		result = get_cmd_result("file -i %s", buf);
+		snprintf(sizestr, sizeof(sizestr), "%s", auto_trans_size((long long) sb2.st_size));
+		char * result = get_cmd_result("file -i %s | awk -F: '{print $2}'", buf);
 		if(result && strlen(result))
 		{
-			if(strstr(result, "zip") ||
-				strstr(result, "gz") ||
-				strstr(result, "rar"))
+			//printf("result=[%s:%s]\n", buf, result);
+			if(strstr(result, "application/gzip") ||
+				strstr(result, "application/zip") ||
+				strstr(result, "application/rar") ||
+				strstr(result, "application/x-7z-compressed"))
 				snprintf(pic, sizeof(pic),"/pics/%s.png", "zip");
 			
-			if(strstr(result, "text"))
+			if(strstr(result, "text/plain"))
 				snprintf(pic, sizeof(pic),"/pics/%s.png", "txt");
+			
+			if(strstr(result, "application/vnd.debian.binary-package"))
+				snprintf(pic, sizeof(pic),"/pics/%s.png", "pkg");
 
-			if(strstr(result, "iso"))
+			if(strstr(result, "application/x-iso9660-image"))
 				snprintf(pic, sizeof(pic),"/pics/%s.png", "iso");
 
-			if(strstr(result, "image") ||
-				strstr(result, "bitmap"))
+			if(strstr(result, "application/x-executable"))
+				snprintf(pic, sizeof(pic),"/pics/%s.png", "exe");
+			if(strstr(result, "application/x-dosexec"))
+				snprintf(pic, sizeof(pic),"/pics/%s.png", "winexe");
+			
+			if(strstr(result, "image/png") ||
+				strstr(result, "image/x-ms-bmp") ||
+				strstr(result, "image/jpeg"))
 				snprintf(pic, sizeof(pic),"/pics/%s.png", "pic");
 
 			free_cmd_result(&result);
@@ -1807,11 +1859,15 @@ file_details( const char* d, const char* name )
 	
     (void) strftime( timestr, sizeof(timestr), "%Y-%m-%d %H:%M:%S", localtime( &sb2.st_mtime ) );
     strencode( encname, sizeof(encname), name );
-    (void) snprintf(
-	buf, sizeof( buf ), " <img src=\"%s\" width=15 height=20> <a href=\"%s\">%-78.78s</a>   %16s   %32s\n",
-	pic, encname, name, auto_trans_size((long long) sb2.st_size), timestr);
+	
+	//(void) snprintf(
+	//buf, sizeof( buf ), " <img src=\"%s\" width=18 height=18> <a href=\"%s\">%-78.78s</a>   %16s   %32s\n",
+	//pic, encname, name, auto_trans_size((long long) sb2.st_size), timestr);
+	(void) snprintf(
+	buf, sizeof( buf ), "      <tr><td><img src=\"%s\" width=18 height=18></td><td><a href=\"%s\">%-128.128s</a></td><td align=\"right\">%16s</td><td align=\"right\">%32s</td></tr>\n",
+	pic, encname, name, sizestr, timestr);
     return buf;
-    }
+}
 
 
 /* Copies and encodes a string. */
